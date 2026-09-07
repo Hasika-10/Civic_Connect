@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+*/node_modules/
+package-lock.json.backup
+
+# Environment variables & API keys (prevents leaking secrets like GROQ_API_KEY)
+.env
+.env.*
+!.env.example
+*.env
+
+# SQLite Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+civicconnect.db
+
+# User uploads & media
+uploads/*
+!uploads/.gitkeep
+
+# Production builds
+dist/
+client/dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor & OS files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
