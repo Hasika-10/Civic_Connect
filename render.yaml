@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: civicconnect
+    runtime: node
+    plan: free
+    buildCommand: npm install && cd client && npm install && npm run build && cd .. && node server/seed.js
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GROQ_API_KEY
+        sync: false

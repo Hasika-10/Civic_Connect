@@ -3,14 +3,17 @@
   "version": "1.0.0",
   "description": "CivicConnect – AI-Powered Smart Public Complaint Management System",
   "private": true,
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "server": "node server/index.js",
     "client": "cd client && npm run dev",
     "seed": "node server/seed.js",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "install-all": "npm install && cd client && npm install",
-    "build": "cd client && npm run build",
-    "start": "NODE_ENV=production node server/index.js",
+    "build": "cd client && npm install && npm run build",
+    "start": "node server/index.js",
     "setup": "npm run install-all && npm run seed"
   },
   "dependencies": {
