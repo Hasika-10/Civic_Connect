@@ -4,7 +4,7 @@ A production-grade, full-stack municipal civic tech platform connecting citizens
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 ### 👤 Citizen Portal
 - **Fast 1-Page Complaint Reporting**: File issues with title, description, category, and photo attachments.
@@ -143,6 +143,10 @@ Civic_Connect/
 ```
 
 ---
+Teammates:
+SHREE NITHI B
+HASIKA B
+NAKSHATHRA S
 
 ## 🛡️ License
 Licensed under the [MIT License](LICENSE).
