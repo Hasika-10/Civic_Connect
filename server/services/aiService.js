@@ -226,14 +226,14 @@ async function analyzeComplaint(title, description, categoryName) {
   };
 }
 
-function findDuplicates(db, latitude, longitude, categoryId, description, radiusKm = 0.5) {
+async function findDuplicates(db, latitude, longitude, categoryId, description, radiusKm = 0.5) {
   if (!latitude || !longitude) return [];
 
   // Simple distance calculation using coordinate difference
   const latDiff = radiusKm / 111;
   const lngDiff = radiusKm / (111 * Math.cos(latitude * Math.PI / 180));
 
-  const nearby = db.prepare(`
+  const nearby = await db.prepare(`
     SELECT c.*, cc.name as category_name,
     ABS(c.latitude - ?) * 111 as distance_km
     FROM complaints c
@@ -331,14 +331,14 @@ Respond with a single valid JSON object containing an "insights" array:
 
 async function generateInsights(db) {
   // Area with most complaints
-  const hotspot = db.prepare(`
+  const hotspot = await db.prepare(`
     SELECT area, COUNT(*) as count FROM complaints
     WHERE created_at > datetime('now', '-30 days')
     GROUP BY area ORDER BY count DESC LIMIT 1
   `).get();
 
   // Category trend
-  const trending = db.prepare(`
+  const trending = await db.prepare(`
     SELECT cc.name, COUNT(*) as count FROM complaints c
     JOIN complaint_categories cc ON c.category_id = cc.id
     WHERE c.created_at > datetime('now', '-7 days')
@@ -346,20 +346,20 @@ async function generateInsights(db) {
   `).get();
 
   // Overdue complaints
-  const overdue = db.prepare(`
+  const overdue = await db.prepare(`
     SELECT COUNT(*) as count FROM complaints
     WHERE status NOT IN ('resolved','closed','rejected')
     AND sla_deadline < datetime('now')
   `).get();
 
   // Critical complaints
-  const critical = db.prepare(`
+  const critical = await db.prepare(`
     SELECT COUNT(*) as count FROM complaints
     WHERE priority = 'critical' AND status NOT IN ('resolved','closed','rejected')
   `).get();
 
   // Duplicate cluster
-  const clusters = db.prepare(`
+  const clusters = await db.prepare(`
     SELECT area, cc.name as category, COUNT(*) as count FROM complaints c
     JOIN complaint_categories cc ON c.category_id = cc.id
     WHERE c.created_at > datetime('now', '-14 days')
@@ -368,7 +368,7 @@ async function generateInsights(db) {
   `).all();
 
   // Resolution performance
-  const avgRes = db.prepare(`
+  const avgRes = await db.prepare(`
     SELECT AVG(JULIANDAY(resolved_at) - JULIANDAY(created_at)) as avg_days
     FROM complaints WHERE resolved_at IS NOT NULL AND created_at > datetime('now', '-30 days')
   `).get();

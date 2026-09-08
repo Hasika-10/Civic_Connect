@@ -4,13 +4,13 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb, initDatabase } = require('./database');
 
 async function seed() {
-  initDatabase();
+  await initDatabase();
   const db = getDb();
 
   console.log('🌱 Seeding database...\n');
 
   // Clear existing data
-  db.exec(`
+  await db.exec(`
     DELETE FROM audit_logs;
     DELETE FROM sla_records;
     DELETE FROM notifications;
@@ -41,7 +41,9 @@ async function seed() {
   ];
 
   const insertDept = db.prepare('INSERT INTO departments (name, code, description, head_name, head_email, sla_hours) VALUES (?, ?, ?, ?, ?, ?)');
-  departments.forEach(d => insertDept.run(d.name, d.code, d.description, d.head_name, d.head_email, d.sla_hours));
+  for (const d of departments) {
+    await insertDept.run(d.name, d.code, d.description, d.head_name, d.head_email, d.sla_hours);
+  }
   console.log(`✅ ${departments.length} departments created`);
 
   // Create categories
@@ -61,7 +63,9 @@ async function seed() {
   ];
 
   const insertCat = db.prepare('INSERT INTO complaint_categories (name, code, icon, department_id) VALUES (?, ?, ?, ?)');
-  categories.forEach(c => insertCat.run(c.name, c.code, c.icon, c.dept));
+  for (const c of categories) {
+    await insertCat.run(c.name, c.code, c.icon, c.dept);
+  }
   console.log(`✅ ${categories.length} categories created`);
 
   // Create subcategories
@@ -85,7 +89,9 @@ async function seed() {
   ];
 
   const insertSubcat = db.prepare('INSERT INTO complaint_subcategories (category_id, name, code) VALUES (?, ?, ?)');
-  subcategories.forEach(s => insertSubcat.run(s.cat, s.name, s.code));
+  for (const s of subcategories) {
+    await insertSubcat.run(s.cat, s.name, s.code);
+  }
   console.log(`✅ ${subcategories.length} subcategories created`);
 
   // Create areas
@@ -101,7 +107,9 @@ async function seed() {
   ];
 
   const insertArea = db.prepare('INSERT INTO areas (name, city, zone, latitude, longitude) VALUES (?, ?, ?, ?, ?)');
-  areas.forEach(a => insertArea.run(a.name, a.city, a.zone, a.lat, a.lng));
+  for (const a of areas) {
+    await insertArea.run(a.name, a.city, a.zone, a.lat, a.lng);
+  }
   console.log(`✅ ${areas.length} areas created`);
 
   // Create users
@@ -124,7 +132,9 @@ async function seed() {
   ];
 
   const insertUser = db.prepare('INSERT INTO users (full_name, email, phone, password, role, city, area, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-  users.forEach(u => insertUser.run(u.name, u.email, u.phone, hashedPassword, u.role, u.city, u.area, u.dept));
+  for (const u of users) {
+    await insertUser.run(u.name, u.email, u.phone, hashedPassword, u.role, u.city, u.area, u.dept);
+  }
   console.log(`✅ ${users.length} users created`);
 
   // Create sample complaints
@@ -167,7 +177,8 @@ async function seed() {
   const safetyRisks = ['Vehicle/Accident Hazard', 'Health Hazard', 'Electrical Hazard', 'Pedestrian Safety Risk', 'Flooding Risk', 'Child Safety Risk', 'Low Risk', 'Environmental Hazard'];
 
   const now = new Date();
-  sampleComplaints.forEach((c, i) => {
+  for (let i = 0; i < sampleComplaints.length; i++) {
+    const c = sampleComplaints[i];
     const daysAgo = Math.floor(Math.random() * 30) + 1;
     const created = new Date(now - daysAgo * 24 * 60 * 60 * 1000);
     const slaHours = c.priority === 'critical' ? 12 : c.priority === 'high' ? 24 : c.priority === 'medium' ? 48 : 72;
@@ -176,7 +187,7 @@ async function seed() {
 
     const riskIndex = Math.min(Math.floor(c.severity / 1.5), safetyRisks.length - 1);
 
-    insertComplaint.run(
+    await insertComplaint.run(
       complaintId, c.uid, c.title, c.desc, c.cat, c.subcat,
       c.lat, c.lng, c.addr, c.landmark, c.city, c.area,
       c.status, c.priority, c.severity, c.dept, c.officer,
@@ -188,29 +199,29 @@ async function seed() {
     );
 
     // Add status history
-    insertStatusHistory.run(i + 1, null, 'submitted', c.uid, 'Complaint submitted by citizen', created.toISOString());
+    await insertStatusHistory.run(i + 1, null, 'submitted', c.uid, 'Complaint submitted by citizen', created.toISOString());
     if (['ai_analyzed', 'assigned', 'under_review', 'in_progress', 'resolved', 'closed'].includes(c.status)) {
-      insertStatusHistory.run(i + 1, 'submitted', 'ai_analyzed', null, 'AI analysis completed', new Date(created.getTime() + 300000).toISOString());
+      await insertStatusHistory.run(i + 1, 'submitted', 'ai_analyzed', null, 'AI analysis completed', new Date(created.getTime() + 300000).toISOString());
     }
     if (['assigned', 'under_review', 'in_progress', 'resolved', 'closed'].includes(c.status)) {
-      insertStatusHistory.run(i + 1, 'ai_analyzed', 'assigned', 1, `Assigned to ${aiDepts[c.dept]}`, new Date(created.getTime() + 3600000).toISOString());
+      await insertStatusHistory.run(i + 1, 'ai_analyzed', 'assigned', 1, `Assigned to ${aiDepts[c.dept]}`, new Date(created.getTime() + 3600000).toISOString());
     }
     if (['under_review', 'in_progress', 'resolved', 'closed'].includes(c.status)) {
-      insertStatusHistory.run(i + 1, 'assigned', 'under_review', c.officer, 'Complaint under review by officer', new Date(created.getTime() + 7200000).toISOString());
+      await insertStatusHistory.run(i + 1, 'assigned', 'under_review', c.officer, 'Complaint under review by officer', new Date(created.getTime() + 7200000).toISOString());
     }
     if (['in_progress', 'resolved', 'closed'].includes(c.status)) {
-      insertStatusHistory.run(i + 1, 'under_review', 'in_progress', c.officer, 'Work has started on this issue', new Date(created.getTime() + 14400000).toISOString());
+      await insertStatusHistory.run(i + 1, 'under_review', 'in_progress', c.officer, 'Work has started on this issue', new Date(created.getTime() + 14400000).toISOString());
     }
     if (['resolved', 'closed'].includes(c.status)) {
-      insertStatusHistory.run(i + 1, 'in_progress', 'resolved', c.officer, 'Issue has been resolved', new Date(created.getTime() + 86400000).toISOString());
+      await insertStatusHistory.run(i + 1, 'in_progress', 'resolved', c.officer, 'Issue has been resolved', new Date(created.getTime() + 86400000).toISOString());
     }
     if (c.status === 'closed') {
-      insertStatusHistory.run(i + 1, 'resolved', 'closed', c.uid, 'Complaint verified and closed', new Date(created.getTime() + 172800000).toISOString());
+      await insertStatusHistory.run(i + 1, 'resolved', 'closed', c.uid, 'Complaint verified and closed', new Date(created.getTime() + 172800000).toISOString());
     }
 
     // Add notification
-    insertNotification.run(c.uid, 'Complaint Submitted', `Your complaint "${c.title}" has been submitted successfully. Complaint ID: ${complaintId}`, 'success', i + 1, created.toISOString());
-  });
+    await insertNotification.run(c.uid, 'Complaint Submitted', `Your complaint "${c.title}" has been submitted successfully. Complaint ID: ${complaintId}`, 'success', i + 1, created.toISOString());
+  }
 
   console.log(`✅ ${sampleComplaints.length} complaints created with status history`);
 
@@ -224,7 +235,9 @@ async function seed() {
   ];
 
   const insertFeedback = db.prepare('INSERT INTO feedback (complaint_id, user_id, rating, satisfaction, comment, is_resolved) VALUES (?, ?, ?, ?, ?, ?)');
-  feedbackData.forEach(f => insertFeedback.run(f.complaint, f.user, f.rating, f.satisfaction, f.comment, f.resolved));
+  for (const f of feedbackData) {
+    await insertFeedback.run(f.complaint, f.user, f.rating, f.satisfaction, f.comment, f.resolved);
+  }
   console.log(`✅ ${feedbackData.length} feedback entries created`);
 
   // Add some comments
@@ -239,7 +252,9 @@ async function seed() {
   ];
 
   const insertComment = db.prepare('INSERT INTO complaint_comments (complaint_id, user_id, comment, is_internal) VALUES (?, ?, ?, ?)');
-  comments.forEach(c => insertComment.run(c.complaint, c.user, c.comment, c.internal));
+  for (const c of comments) {
+    await insertComment.run(c.complaint, c.user, c.comment, c.internal);
+  }
   console.log(`✅ ${comments.length} comments created`);
 
   // Add upvotes
@@ -254,16 +269,16 @@ async function seed() {
 
   const insertUpvote = db.prepare('INSERT OR IGNORE INTO complaint_upvotes (complaint_id, user_id) VALUES (?, ?)');
   const updateUpvoteCount = db.prepare('UPDATE complaints SET upvote_count = (SELECT COUNT(*) + 1 FROM complaint_upvotes WHERE complaint_id = ?) WHERE id = ?');
-  upvotes.forEach(u => {
-    insertUpvote.run(u.complaint, u.user);
-    updateUpvoteCount.run(u.complaint, u.complaint);
-  });
+  for (const u of upvotes) {
+    await insertUpvote.run(u.complaint, u.user);
+    await updateUpvoteCount.run(u.complaint, u.complaint);
+  }
   console.log(`✅ ${upvotes.length} upvotes created`);
 
   // Audit logs
   const insertAudit = db.prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value) VALUES (?, ?, ?, ?, ?)');
-  insertAudit.run(1, 'SYSTEM_INIT', 'system', null, 'Database seeded with demo data');
-  insertAudit.run(1, 'USER_CREATE', 'user', 1, 'Admin user created');
+  await insertAudit.run(1, 'SYSTEM_INIT', 'system', null, 'Database seeded with demo data');
+  await insertAudit.run(1, 'USER_CREATE', 'user', 1, 'Admin user created');
   console.log('✅ Audit logs created');
 
   console.log('\n🎉 Database seeded successfully!');

@@ -13,10 +13,14 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "install-all": "npm install && cd client && npm install",
     "build": "cd client && npm install && npm run build",
+    "vercel-build": "npm run build",
+    "migrate:turso": "node server/scripts/migrate-to-turso.js",
     "start": "node server/index.js",
     "setup": "npm run install-all && npm run seed"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@vercel/blob": "^2.8.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^13.0.3",
     "concurrently": "^9.1.0",

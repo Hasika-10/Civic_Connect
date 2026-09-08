@@ -1,10 +1,10 @@
 const { getDb } = require('../database');
 
-function autoAssignComplaint(complaintId, departmentId) {
+async function autoAssignComplaint(complaintId, departmentId) {
   const db = getDb();
 
   // Find an authority user in the department with the fewest active complaints
-  const officer = db.prepare(`
+  const officer = await db.prepare(`
     SELECT u.id, u.full_name,
     (SELECT COUNT(*) FROM complaints c WHERE c.assigned_officer_id = u.id AND c.status NOT IN ('resolved','closed','rejected')) as active_count
     FROM users u
@@ -14,17 +14,17 @@ function autoAssignComplaint(complaintId, departmentId) {
   `).get(departmentId);
 
   if (officer) {
-    db.prepare('UPDATE complaints SET assigned_officer_id = ?, department_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    await db.prepare('UPDATE complaints SET assigned_officer_id = ?, department_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(officer.id, departmentId, 'assigned', complaintId);
 
-    db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
+    await db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
       .run(complaintId, 'ai_analyzed', 'assigned', null, `Auto-assigned to ${officer.full_name}`);
 
     return officer;
   }
 
   // No officer found, just assign to department
-  db.prepare('UPDATE complaints SET department_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+  await db.prepare('UPDATE complaints SET department_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(departmentId, complaintId);
 
   return null;

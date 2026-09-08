@@ -3,7 +3,7 @@ const { getDb } = require('../database');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'civicconnect_super_secret_key_2025';
 
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -14,7 +14,7 @@ function authenticateToken(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const db = getDb();
-    const user = db.prepare('SELECT id, full_name, email, role, department_id, city, area FROM users WHERE id = ? AND is_active = 1').get(decoded.userId);
+    const user = await db.prepare('SELECT id, full_name, email, role, department_id, city, area FROM users WHERE id = ? AND is_active = 1').get(decoded.userId);
 
     if (!user) {
       return res.status(401).json({ error: 'User not found or inactive' });

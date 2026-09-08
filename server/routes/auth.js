@@ -20,24 +20,24 @@ router.post('/register', async (req, res) => {
     }
 
     const db = getDb();
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existing = await db.prepare('SELECT id FROM users WHERE email = ?').get(email);
     if (existing) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const result = db.prepare(
+    const result = await db.prepare(
       'INSERT INTO users (full_name, email, phone, password, role, city, area) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(full_name, email, phone || null, hashedPassword, 'citizen', city || null, area || null);
 
     const token = jwt.sign({ userId: result.lastInsertRowid }, JWT_SECRET, { expiresIn: '7d' });
 
-    const user = db.prepare('SELECT id, full_name, email, phone, role, city, area, profile_photo, created_at FROM users WHERE id = ?')
+    const user = await db.prepare('SELECT id, full_name, email, phone, role, city, area, profile_photo, created_at FROM users WHERE id = ?')
       .get(result.lastInsertRowid);
 
     // Welcome notification
-    db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)')
+    await db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)')
       .run(user.id, 'Welcome to CivicConnect!', 'Your account has been created successfully. Start reporting civic issues in your area.', 'success');
 
     res.status(201).json({ token, user });
@@ -60,7 +60,7 @@ router.post('/login', async (req, res) => {
     password = password.toString().trim();
 
     const db = getDb();
-    const user = db.prepare(`
+    const user = await db.prepare(`
       SELECT * FROM users 
       WHERE (
         LOWER(TRIM(email)) = LOWER(?) 
@@ -85,7 +85,7 @@ router.post('/login', async (req, res) => {
     const { password: _, ...userWithoutPassword } = user;
 
     // Audit log
-    db.prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES (?, ?, ?, ?)')
+    await db.prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES (?, ?, ?, ?)')
       .run(user.id, 'LOGIN', 'user', user.id);
 
     res.json({ token, user: userWithoutPassword });
@@ -96,24 +96,24 @@ router.post('/login', async (req, res) => {
 });
 
 // Get current user
-router.get('/me', authenticateToken, (req, res) => {
+router.get('/me', authenticateToken, async (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, full_name, email, phone, role, city, area, profile_photo, department_id, language, notification_email, notification_sms, notification_push, created_at FROM users WHERE id = ?')
+  const user = await db.prepare('SELECT id, full_name, email, phone, role, city, area, profile_photo, department_id, language, notification_email, notification_sms, notification_push, created_at FROM users WHERE id = ?')
     .get(req.user.id);
 
   if (user && user.department_id) {
-    user.department = db.prepare('SELECT * FROM departments WHERE id = ?').get(user.department_id);
+    user.department = await db.prepare('SELECT * FROM departments WHERE id = ?').get(user.department_id);
   }
 
   res.json(user);
 });
 
 // Update profile
-router.put('/profile', authenticateToken, (req, res) => {
+router.put('/profile', authenticateToken, async (req, res) => {
   const { full_name, phone, city, area, language, notification_email, notification_sms, notification_push } = req.body;
   const db = getDb();
 
-  db.prepare(`
+  await db.prepare(`
     UPDATE users SET full_name = COALESCE(?, full_name), phone = COALESCE(?, phone),
     city = COALESCE(?, city), area = COALESCE(?, area), language = COALESCE(?, language),
     notification_email = COALESCE(?, notification_email), notification_sms = COALESCE(?, notification_sms),
@@ -121,7 +121,7 @@ router.put('/profile', authenticateToken, (req, res) => {
     WHERE id = ?
   `).run(full_name, phone, city, area, language, notification_email, notification_sms, notification_push, req.user.id);
 
-  const user = db.prepare('SELECT id, full_name, email, phone, role, city, area, profile_photo, language, notification_email, notification_sms, notification_push FROM users WHERE id = ?')
+  const user = await db.prepare('SELECT id, full_name, email, phone, role, city, area, profile_photo, language, notification_email, notification_sms, notification_push FROM users WHERE id = ?')
     .get(req.user.id);
 
   res.json(user);
@@ -132,7 +132,7 @@ router.put('/password', authenticateToken, async (req, res) => {
   const { current_password, new_password } = req.body;
   const db = getDb();
 
-  const user = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
   const valid = await bcrypt.compare(current_password, user.password);
 
   if (!valid) {
@@ -140,7 +140,7 @@ router.put('/password', authenticateToken, async (req, res) => {
   }
 
   const hashed = await bcrypt.hash(new_password, 10);
-  db.prepare('UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(hashed, req.user.id);
+  await db.prepare('UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(hashed, req.user.id);
 
   res.json({ message: 'Password changed successfully' });
 });

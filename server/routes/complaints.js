@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const storageService = require('../services/storageService');
 const { analyzeComplaint, findDuplicates } = require('../services/aiService');
 const { autoAssignComplaint, calculateSLA } = require('../services/assignmentService');
 const { createNotification, notifyStatusChange, notifyAssignment } = require('../services/notificationService');
@@ -10,9 +11,9 @@ const { createNotification, notifyStatusChange, notifyAssignment } = require('..
 const router = express.Router();
 
 // Get all complaints for current user (citizen)
-router.get('/my', authenticateToken, (req, res) => {
+router.get('/my', authenticateToken, async (req, res) => {
   const db = getDb();
-  const complaints = db.prepare(`
+  const complaints = await db.prepare(`
     SELECT c.*, cc.name as category_name, cc.icon as category_icon, d.name as department_name,
     u.full_name as officer_name
     FROM complaints c
@@ -24,17 +25,17 @@ router.get('/my', authenticateToken, (req, res) => {
   `).all(req.user.id);
 
   // Get images for each complaint
-  complaints.forEach(c => {
-    c.images = db.prepare('SELECT * FROM complaint_images WHERE complaint_id = ?').all(c.id);
-  });
+  for (const c of complaints) {
+    c.images = await db.prepare('SELECT * FROM complaint_images WHERE complaint_id = ?').all(c.id);
+  }
 
   res.json(complaints);
 });
 
 // Get single complaint detail
-router.get('/:id', authenticateToken, (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   const db = getDb();
-  const complaint = db.prepare(`
+  const complaint = await db.prepare(`
     SELECT c.*, cc.name as category_name, cc.icon as category_icon,
     csc.name as subcategory_name, d.name as department_name,
     u.full_name as officer_name, u.phone as officer_phone,
@@ -58,10 +59,10 @@ router.get('/:id', authenticateToken, (req, res) => {
   }
 
   // Get images
-  complaint.images = db.prepare('SELECT * FROM complaint_images WHERE complaint_id = ?').all(complaint.id);
+  complaint.images = await db.prepare('SELECT * FROM complaint_images WHERE complaint_id = ?').all(complaint.id);
 
   // Get status history
-  complaint.statusHistory = db.prepare(`
+  complaint.statusHistory = await db.prepare(`
     SELECT csh.*, u.full_name as changed_by_name
     FROM complaint_status_history csh
     LEFT JOIN users u ON csh.changed_by = u.id
@@ -70,7 +71,7 @@ router.get('/:id', authenticateToken, (req, res) => {
   `).all(complaint.id);
 
   // Get comments
-  complaint.comments = db.prepare(`
+  complaint.comments = await db.prepare(`
     SELECT cc.*, u.full_name as user_name, u.role as user_role
     FROM complaint_comments cc
     JOIN users u ON cc.user_id = u.id
@@ -80,11 +81,13 @@ router.get('/:id', authenticateToken, (req, res) => {
   `).all(complaint.id);
 
   // Get feedback
-  complaint.feedback = db.prepare('SELECT * FROM feedback WHERE complaint_id = ?').get(complaint.id);
+  complaint.feedback = await db.prepare('SELECT * FROM feedback WHERE complaint_id = ?').get(complaint.id);
 
   // Get upvote count and if current user has upvoted
-  complaint.upvotes = db.prepare('SELECT COUNT(*) as count FROM complaint_upvotes WHERE complaint_id = ?').get(complaint.id).count + 1;
-  complaint.hasUpvoted = !!db.prepare('SELECT id FROM complaint_upvotes WHERE complaint_id = ? AND user_id = ?').get(complaint.id, req.user.id);
+  const upvoteRow = await db.prepare('SELECT COUNT(*) as count FROM complaint_upvotes WHERE complaint_id = ?').get(complaint.id);
+  complaint.upvotes = (upvoteRow?.count || 0) + 1;
+  const userUpvote = await db.prepare('SELECT id FROM complaint_upvotes WHERE complaint_id = ? AND user_id = ?').get(complaint.id, req.user.id);
+  complaint.hasUpvoted = !!userUpvote;
 
   res.json(complaint);
 });
@@ -102,7 +105,7 @@ router.post('/', authenticateToken, upload.array('images', 10), async (req, res)
     // Get category name for AI analysis
     let categoryName = null;
     if (category_id) {
-      const cat = db.prepare('SELECT name FROM complaint_categories WHERE id = ?').get(category_id);
+      const cat = await db.prepare('SELECT name FROM complaint_categories WHERE id = ?').get(category_id);
       if (cat) categoryName = cat.name;
     }
 
@@ -110,11 +113,11 @@ router.post('/', authenticateToken, upload.array('images', 10), async (req, res)
     const aiResult = await analyzeComplaint(title, description, categoryName);
 
     // Find duplicates
-    const duplicates = findDuplicates(db, parseFloat(latitude), parseFloat(longitude), parseInt(category_id) || aiResult.departmentId, description);
+    const duplicates = await findDuplicates(db, parseFloat(latitude), parseFloat(longitude), parseInt(category_id) || aiResult.departmentId, description);
 
     // Generate unique complaint ID
     const year = new Date().getFullYear();
-    const lastComplaint = db.prepare("SELECT complaint_id FROM complaints WHERE complaint_id LIKE ? ORDER BY id DESC LIMIT 1").get(`CC-${year}-%`);
+    const lastComplaint = await db.prepare("SELECT complaint_id FROM complaints WHERE complaint_id LIKE ? ORDER BY id DESC LIMIT 1").get(`CC-${year}-%`);
     let nextNum = 1;
     if (lastComplaint) {
       const parts = lastComplaint.complaint_id.split('-');
@@ -127,11 +130,13 @@ router.post('/', authenticateToken, upload.array('images', 10), async (req, res)
     const slaDeadline = new Date(Date.now() + slaHours * 60 * 60 * 1000).toISOString();
 
     // Determine department
-    const deptId = parseInt(category_id) ?
-      (db.prepare('SELECT department_id FROM complaint_categories WHERE id = ?').get(parseInt(category_id))?.department_id || aiResult.departmentId) :
-      aiResult.departmentId;
+    let deptId = aiResult.departmentId;
+    if (parseInt(category_id)) {
+      const catRow = await db.prepare('SELECT department_id FROM complaint_categories WHERE id = ?').get(parseInt(category_id));
+      if (catRow?.department_id) deptId = catRow.department_id;
+    }
 
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO complaints (complaint_id, user_id, title, description, category_id, subcategory_id,
         latitude, longitude, address, landmark, city, area, status, priority, severity,
         department_id, ai_category, ai_severity, ai_priority, ai_summary, ai_department,
@@ -150,41 +155,42 @@ router.post('/', authenticateToken, upload.array('images', 10), async (req, res)
 
     const complaintId = result.lastInsertRowid;
 
-    // Save images
+    // Save images via storage service (cloud on Vercel, disk locally)
     if (req.files && req.files.length > 0) {
       const insertImage = db.prepare('INSERT INTO complaint_images (complaint_id, image_path, uploaded_by) VALUES (?, ?, ?)');
-      req.files.forEach(file => {
-        insertImage.run(complaintId, `/uploads/${file.filename}`, req.user.id);
-      });
+      for (const file of req.files) {
+        const imagePath = await storageService.saveFile(file);
+        await insertImage.run(complaintId, imagePath, req.user.id);
+      }
     }
 
     // Status history
-    db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
+    await db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
       .run(complaintId, null, 'submitted', req.user.id, 'Complaint submitted by citizen');
-    db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
+    await db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
       .run(complaintId, 'submitted', 'ai_analyzed', null, `AI analysis complete: ${aiResult.category} (${aiResult.priority} priority)`);
 
     // Auto-assign to department
-    const assignedOfficer = autoAssignComplaint(complaintId, deptId);
+    const assignedOfficer = await autoAssignComplaint(complaintId, deptId);
 
     // Notifications
-    createNotification(req.user.id, 'Complaint Submitted',
+    await createNotification(req.user.id, 'Complaint Submitted',
       `Your complaint "${title}" has been submitted. ID: ${complaintIdStr}`, 'success', complaintId);
 
     if (assignedOfficer) {
-      notifyAssignment(complaintId, assignedOfficer.id);
+      await notifyAssignment(complaintId, assignedOfficer.id);
     }
 
     // SLA record
-    db.prepare('INSERT INTO sla_records (complaint_id, priority, sla_hours, deadline) VALUES (?, ?, ?, ?)')
+    await db.prepare('INSERT INTO sla_records (complaint_id, priority, sla_hours, deadline) VALUES (?, ?, ?, ?)')
       .run(complaintId, aiResult.priority, slaHours, slaDeadline);
 
     // Audit log
-    db.prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value) VALUES (?, ?, ?, ?, ?)')
+    await db.prepare('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value) VALUES (?, ?, ?, ?, ?)')
       .run(req.user.id, 'COMPLAINT_CREATE', 'complaint', complaintId, complaintIdStr);
 
     // Fetch the full complaint to return
-    const complaint = db.prepare(`
+    const complaint = await db.prepare(`
       SELECT c.*, cc.name as category_name, d.name as department_name
       FROM complaints c
       LEFT JOIN complaint_categories cc ON c.category_id = cc.id
@@ -192,7 +198,7 @@ router.post('/', authenticateToken, upload.array('images', 10), async (req, res)
       WHERE c.id = ?
     `).get(complaintId);
 
-    complaint.images = db.prepare('SELECT * FROM complaint_images WHERE complaint_id = ?').all(complaintId);
+    complaint.images = await db.prepare('SELECT * FROM complaint_images WHERE complaint_id = ?').all(complaintId);
     complaint.aiAnalysis = aiResult;
     complaint.duplicates = duplicates;
 
@@ -210,35 +216,35 @@ router.post('/analyze', authenticateToken, async (req, res) => {
 
   let categoryName = null;
   if (category_id) {
-    const cat = db.prepare('SELECT name FROM complaint_categories WHERE id = ?').get(parseInt(category_id));
+    const cat = await db.prepare('SELECT name FROM complaint_categories WHERE id = ?').get(parseInt(category_id));
     if (cat) categoryName = cat.name;
   }
 
   const aiResult = await analyzeComplaint(title || '', description || '', categoryName);
-  const duplicates = findDuplicates(db, parseFloat(latitude), parseFloat(longitude), parseInt(category_id), description);
+  const duplicates = await findDuplicates(db, parseFloat(latitude), parseFloat(longitude), parseInt(category_id), description);
 
   res.json({ analysis: aiResult, duplicates });
 });
 
 // Add comment
-router.post('/:id/comment', authenticateToken, (req, res) => {
+router.post('/:id/comment', authenticateToken, async (req, res) => {
   const db = getDb();
   const { comment, is_internal } = req.body;
 
-  db.prepare('INSERT INTO complaint_comments (complaint_id, user_id, comment, is_internal) VALUES (?, ?, ?, ?)')
+  await db.prepare('INSERT INTO complaint_comments (complaint_id, user_id, comment, is_internal) VALUES (?, ?, ?, ?)')
     .run(req.params.id, req.user.id, comment, is_internal ? 1 : 0);
 
   res.json({ message: 'Comment added' });
 });
 
 // Upvote complaint
-router.post('/:id/upvote', authenticateToken, (req, res) => {
+router.post('/:id/upvote', authenticateToken, async (req, res) => {
   const db = getDb();
 
   try {
-    db.prepare('INSERT INTO complaint_upvotes (complaint_id, user_id) VALUES (?, ?)')
+    await db.prepare('INSERT INTO complaint_upvotes (complaint_id, user_id) VALUES (?, ?)')
       .run(req.params.id, req.user.id);
-    db.prepare('UPDATE complaints SET upvote_count = upvote_count + 1 WHERE id = ?')
+    await db.prepare('UPDATE complaints SET upvote_count = upvote_count + 1 WHERE id = ?')
       .run(req.params.id);
     res.json({ message: 'Upvoted' });
   } catch (e) {
@@ -247,29 +253,29 @@ router.post('/:id/upvote', authenticateToken, (req, res) => {
 });
 
 // Submit feedback
-router.post('/:id/feedback', authenticateToken, (req, res) => {
+router.post('/:id/feedback', authenticateToken, async (req, res) => {
   const db = getDb();
   const { rating, satisfaction, comment, is_resolved, reopen_reason } = req.body;
 
-  db.prepare(`INSERT OR REPLACE INTO feedback (complaint_id, user_id, rating, satisfaction, comment, is_resolved, reopen_reason)
+  await db.prepare(`INSERT OR REPLACE INTO feedback (complaint_id, user_id, rating, satisfaction, comment, is_resolved, reopen_reason)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(req.params.id, req.user.id, rating, satisfaction, comment, is_resolved ? 1 : 0, reopen_reason);
 
   if (!is_resolved && reopen_reason) {
     // Reopen complaint
-    db.prepare("UPDATE complaints SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
-    db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
+    await db.prepare("UPDATE complaints SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
+    await db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, 'resolved', 'in_progress', req.user.id, `Reopened by citizen: ${reopen_reason}`);
 
-    const complaint = db.prepare('SELECT * FROM complaints WHERE id = ?').get(req.params.id);
+    const complaint = await db.prepare('SELECT * FROM complaints WHERE id = ?').get(req.params.id);
     if (complaint.assigned_officer_id) {
-      createNotification(complaint.assigned_officer_id, 'Complaint Reopened',
+      await createNotification(complaint.assigned_officer_id, 'Complaint Reopened',
         `Complaint ${complaint.complaint_id} has been reopened by citizen. Reason: ${reopen_reason}`, 'warning', complaint.id);
     }
   } else {
     // Close complaint
-    db.prepare("UPDATE complaints SET status = 'closed', closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
-    db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
+    await db.prepare("UPDATE complaints SET status = 'closed', closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
+    await db.prepare('INSERT INTO complaint_status_history (complaint_id, old_status, new_status, changed_by, comment) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, 'resolved', 'closed', req.user.id, `Citizen verified: Rating ${rating}/5`);
   }
 
@@ -277,23 +283,24 @@ router.post('/:id/feedback', authenticateToken, (req, res) => {
 });
 
 // Get categories
-router.get('/meta/categories', (req, res) => {
+router.get('/meta/categories', async (req, res) => {
   const db = getDb();
-  const categories = db.prepare('SELECT * FROM complaint_categories WHERE is_active = 1').all();
-  categories.forEach(c => {
-    c.subcategories = db.prepare('SELECT * FROM complaint_subcategories WHERE category_id = ?').all(c.id);
-  });
+  const categories = await db.prepare('SELECT * FROM complaint_categories WHERE is_active = 1').all();
+  for (const c of categories) {
+    c.subcategories = await db.prepare('SELECT * FROM complaint_subcategories WHERE category_id = ?').all(c.id);
+  }
   res.json(categories);
 });
 
 // Get areas
-router.get('/meta/areas', (req, res) => {
+router.get('/meta/areas', async (req, res) => {
   const db = getDb();
-  res.json(db.prepare('SELECT * FROM areas WHERE is_active = 1').all());
+  const areas = await db.prepare('SELECT * FROM areas WHERE is_active = 1').all();
+  res.json(areas);
 });
 
 // Get map data
-router.get('/map/all', (req, res) => {
+router.get('/map/all', async (req, res) => {
   const db = getDb();
   const { category, status, priority, area } = req.query;
 
@@ -309,7 +316,8 @@ router.get('/map/all', (req, res) => {
   if (area) { query += ' AND c.area = ?'; params.push(area); }
 
   query += ' ORDER BY c.created_at DESC';
-  res.json(db.prepare(query).all(...params));
+  const data = await db.prepare(query).all(...params);
+  res.json(data);
 });
 
 module.exports = router;
