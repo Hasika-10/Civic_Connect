@@ -33,9 +33,9 @@ router.get('/overview', authenticateToken, requireRole('authority', 'admin'), (r
   res.json(data);
 });
 
-router.get('/insights', authenticateToken, requireRole('authority', 'admin'), (req, res) => {
+router.get('/insights', authenticateToken, requireRole('authority', 'admin'), async (req, res) => {
   const db = getDb();
-  const insights = generateInsights(db);
+  const insights = await generateInsights(db);
   res.json(insights);
 });
 

@@ -263,23 +263,79 @@ function findDuplicates(db, latitude, longitude, categoryId, description, radius
   }));
 }
 
-function generateInsights(db) {
-  const insights = [];
+async function callGroqInsights(statsSummary) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return null;
 
+  try {
+    const prompt = `You are an AI civic intelligence director for a municipal smart city dashboard.
+Analyze these city-wide complaint statistics:
+- Hotspot Area: ${statsSummary.hotspotArea || 'None'} (${statsSummary.hotspotCount || 0} complaints)
+- Trending Issue: ${statsSummary.trendingCategory || 'None'} (${statsSummary.trendingCount || 0} complaints this week)
+- Overdue Complaints: ${statsSummary.overdueCount || 0} past SLA deadline
+- Critical Complaints: ${statsSummary.criticalCount || 0} urgent hazards active
+- Recurring Clusters: ${statsSummary.clusterSummary || 'None'}
+- Avg Resolution Time: ${statsSummary.avgDays || 'N/A'} days
+
+Generate 3 to 5 concise, high-impact municipal intelligence insights and actionable alerts.
+Respond with a single valid JSON object containing an "insights" array:
+{
+  "insights": [
+    {
+      "type": "<string, e.g. Hotspot Alert, SLA Escalation, Public Safety, Infrastructure Hazard>",
+      "icon": "<single emoji, e.g. 🔥, ⚠️, 🚨, 🚰, 📈, ⏱️>",
+      "message": "<1-2 clear sentences with realistic municipal insight and recommended action>",
+      "severity": "critical" | "high" | "medium" | "low"
+    }
+  ]
+}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'qwen/qwen3.8-27b',
+        messages: [
+          { role: 'system', content: 'You are an expert AI civic intelligence director. Output only strict JSON.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        response_format: { type: 'json_object' }
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) return null;
+
+    const json = await res.json();
+    const text = json.choices?.[0]?.message?.content;
+    if (!text) return null;
+
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed.insights)) return parsed.insights;
+    return null;
+  } catch (err) {
+    console.warn('Groq AI insights error (falling back to rules):', err.message);
+    return null;
+  }
+}
+
+async function generateInsights(db) {
   // Area with most complaints
   const hotspot = db.prepare(`
     SELECT area, COUNT(*) as count FROM complaints
     WHERE created_at > datetime('now', '-30 days')
     GROUP BY area ORDER BY count DESC LIMIT 1
   `).get();
-  if (hotspot) {
-    insights.push({
-      type: 'hotspot',
-      icon: '🔥',
-      message: `${hotspot.area} is the top complaint hotspot with ${hotspot.count} complaints this month.`,
-      severity: 'high'
-    });
-  }
 
   // Category trend
   const trending = db.prepare(`
@@ -288,14 +344,6 @@ function generateInsights(db) {
     WHERE c.created_at > datetime('now', '-7 days')
     GROUP BY c.category_id ORDER BY count DESC LIMIT 1
   `).get();
-  if (trending) {
-    insights.push({
-      type: 'trend',
-      icon: '📈',
-      message: `"${trending.name}" is the most reported issue type this week with ${trending.count} complaints.`,
-      severity: 'medium'
-    });
-  }
 
   // Overdue complaints
   const overdue = db.prepare(`
@@ -303,28 +351,12 @@ function generateInsights(db) {
     WHERE status NOT IN ('resolved','closed','rejected')
     AND sla_deadline < datetime('now')
   `).get();
-  if (overdue && overdue.count > 0) {
-    insights.push({
-      type: 'overdue',
-      icon: '⚠️',
-      message: `${overdue.count} complaints are past their SLA deadline and require immediate attention.`,
-      severity: 'critical'
-    });
-  }
 
   // Critical complaints
   const critical = db.prepare(`
     SELECT COUNT(*) as count FROM complaints
     WHERE priority = 'critical' AND status NOT IN ('resolved','closed','rejected')
   `).get();
-  if (critical && critical.count > 0) {
-    insights.push({
-      type: 'critical',
-      icon: '🚨',
-      message: `${critical.count} critical-priority complaints are currently active and need urgent resolution.`,
-      severity: 'critical'
-    });
-  }
 
   // Duplicate cluster
   const clusters = db.prepare(`
@@ -334,6 +366,71 @@ function generateInsights(db) {
     GROUP BY c.area, c.category_id HAVING count >= 3
     ORDER BY count DESC LIMIT 3
   `).all();
+
+  // Resolution performance
+  const avgRes = db.prepare(`
+    SELECT AVG(JULIANDAY(resolved_at) - JULIANDAY(created_at)) as avg_days
+    FROM complaints WHERE resolved_at IS NOT NULL AND created_at > datetime('now', '-30 days')
+  `).get();
+
+  // Try Groq LLM for intelligent executive insights
+  if (process.env.GROQ_API_KEY) {
+    const statsSummary = {
+      hotspotArea: hotspot?.area,
+      hotspotCount: hotspot?.count,
+      trendingCategory: trending?.name,
+      trendingCount: trending?.count,
+      overdueCount: overdue?.count || 0,
+      criticalCount: critical?.count || 0,
+      clusterSummary: clusters.map(c => `${c.count} ${c.category} in ${c.area}`).join(', '),
+      avgDays: avgRes?.avg_days ? (Math.round(avgRes.avg_days * 10) / 10) : null
+    };
+
+    const aiInsights = await callGroqInsights(statsSummary);
+    if (aiInsights && aiInsights.length > 0) {
+      return aiInsights;
+    }
+  }
+
+  // Fallback: Heuristic rule-based insights
+  const insights = [];
+
+  if (hotspot) {
+    insights.push({
+      type: 'hotspot',
+      icon: '🔥',
+      message: `${hotspot.area} is the top complaint hotspot with ${hotspot.count} complaints this month.`,
+      severity: 'high'
+    });
+  }
+
+  if (trending) {
+    insights.push({
+      type: 'trend',
+      icon: '📈',
+      message: `"${trending.name}" is the most reported issue type this week with ${trending.count} complaints.`,
+      severity: 'medium'
+    });
+  }
+
+  if (overdue && overdue.count > 0) {
+    insights.push({
+      type: 'overdue',
+      icon: '⚠️',
+      message: `${overdue.count} complaints are past their SLA deadline and require immediate attention.`,
+      severity: 'critical'
+    });
+  }
+
+  if (critical && critical.count > 0) {
+    insights.push({
+      type: 'critical',
+      icon: '🚨',
+      message: `${critical.count} critical-priority complaints are currently active and need urgent resolution.`,
+      severity: 'critical'
+    });
+  }
+
   clusters.forEach(cl => {
     insights.push({
       type: 'cluster',
@@ -343,11 +440,6 @@ function generateInsights(db) {
     });
   });
 
-  // Resolution performance
-  const avgRes = db.prepare(`
-    SELECT AVG(JULIANDAY(resolved_at) - JULIANDAY(created_at)) as avg_days
-    FROM complaints WHERE resolved_at IS NOT NULL AND created_at > datetime('now', '-30 days')
-  `).get();
   if (avgRes && avgRes.avg_days) {
     insights.push({
       type: 'performance',
@@ -361,4 +453,5 @@ function generateInsights(db) {
 }
 
 module.exports = { analyzeComplaint, findDuplicates, generateInsights };
+
 
