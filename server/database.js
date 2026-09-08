@@ -1,4 +1,17 @@
-const Database = require('better-sqlite3');
+let Database;
+try {
+  Database = require('better-sqlite3');
+} catch (err) {
+  const { DatabaseSync } = require('node:sqlite');
+  Database = function(file) {
+    const syncDb = new DatabaseSync(file);
+    syncDb.pragma = (cmd) => {
+      try { syncDb.exec('PRAGMA ' + cmd); } catch (_) {}
+    };
+    return syncDb;
+  };
+}
+
 const path = require('path');
 
 const DB_PATH = path.join(__dirname, '..', 'civicconnect.db');

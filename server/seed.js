@@ -25,6 +25,7 @@ async function seed() {
     DELETE FROM areas;
     DELETE FROM users;
     DELETE FROM departments;
+    DELETE FROM sqlite_sequence;
   `);
 
   // Create departments
